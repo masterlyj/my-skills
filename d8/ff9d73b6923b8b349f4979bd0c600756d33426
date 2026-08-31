@@ -1,0 +1,19 @@
+.gitattributes
+  s_068d1c58cabecc::t_67ff882ebe0d35 1-13
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.43-trip",
+  "base_commit_sha": "d8ff9d73b6923b8b349f4979bd0c600756d33426",
+  "prompts": {},
+  "sessions": {
+    "s_068d1c58cabecc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7534dfab-8709-473c-822b-a5a1877f9919",
+        "model": "claude-opus-5"
+      },
+      "human_author": "masterlyj <167326996+masterlyj@users.noreply.github.com>"
+    }
+  }
+}
