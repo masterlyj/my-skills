@@ -1,0 +1,4 @@
+interface:
+  display_name: "Executive Report Writing"
+  short_description: "Turn technical material into leader-ready reports"
+  default_prompt: "Use $exec-report-writing to rewrite this technical note into a concise leadership report."

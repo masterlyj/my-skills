@@ -1,0 +1,4 @@
+interface:
+  display_name: "Git Commit"
+  short_description: "编写和审查中文 Git 提交消息规范"
+  default_prompt: "Use $git-commit to 编写或审查这次 Git 提交消息。"

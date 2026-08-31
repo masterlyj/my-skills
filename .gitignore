@@ -1,0 +1,18 @@
+# Windows
+Thumbs.db
+ehthumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# macOS
+.DS_Store
+
+# 编辑器
+*.swp
+*~
+.vscode/
+.idea/
+
+# 临时文件
+*.tmp
+*.bak
