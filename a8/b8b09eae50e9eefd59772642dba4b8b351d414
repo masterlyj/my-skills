@@ -1,0 +1,26 @@
+README.md
+  s_068d1c58cabecc::t_4d5ae277bd24cc 32
+  s_068d1c58cabecc::t_512feb4537b54a 78-94
+  s_068d1c58cabecc::t_8292d2c2ec1a43 28-30
+  s_068d1c58cabecc::t_84ca0e34b61257 50
+  s_068d1c58cabecc::t_9f7a5a43d0e7f4 58-60
+bootstrap.ps1
+  s_068d1c58cabecc::t_8af9e90f4d1cae 65
+  s_068d1c58cabecc::t_2a338ddbd8771e 17-20,31-32
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.43-trip",
+  "base_commit_sha": "a8b8b09eae50e9eefd59772642dba4b8b351d414",
+  "prompts": {},
+  "sessions": {
+    "s_068d1c58cabecc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7534dfab-8709-473c-822b-a5a1877f9919",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "masterlyj <167326996+masterlyj@users.noreply.github.com>"
+    }
+  }
+}
