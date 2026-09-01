@@ -25,9 +25,11 @@ junction，改一处三端同时生效，不会再出现副本各自漂移的问
 | Skill | 用途 |
 |---|---|
 | `exec-report-writing` | 技术材料转领导可读的汇报 |
-| `frontend-slides` | 零依赖 HTML 演示文稿生成 |
-| `repo-docs` | 仓库理解文档生成 |
-| `repo-docs-zh` | `repo-docs` 的中文覆盖层 |
+| `frontend-slides`² | 零依赖 HTML 演示文稿生成 |
+| `repo-docs`² | 仓库理解文档生成 |
+| `repo-docs-zh`² | `repo-docs` 的中文覆盖层 |
+
+² 标记的三个是原样引入的外部 skill，见下方「外部来源 skill」。
 
 ## 仓库位置
 
@@ -45,7 +47,7 @@ Junction 是目录重定向，**可跨盘**（`D:`、`E:` 等都行），因此�
 git clone https://github.com/masterlyj/my-skills.git $env:USERPROFILE\.skills
 cd $env:USERPROFILE\.skills   # 一定要在这个目录里跑脚本
 
-# 2. 建立 junction（对 ~/.claude/skills 和 ~/.codex/skills）
+# 2. 建立 junction（对 ~/.claude/skills、~/.codex/skills、~/.agents/skills）
 .\bootstrap.ps1
 ```
 
@@ -53,8 +55,9 @@ cd $env:USERPROFILE\.skills   # 一定要在这个目录里跑脚本
 > 用当前仓库路径运行。若你想让仓库留在其他盘（如 `D:\my-skills`），克隆到那里
 > 再在同一目录跑 `bootstrap.ps1` 即可——junction 跨盘照常生效。
 
-`bootstrap.ps1` 会自动为 `~/.claude/skills` 和 `~/.codex/skills` 建立 junction；
-某个客户端未安装时会自动跳过。脚本幂等，随时可重跑。
+`bootstrap.ps1` 会自动为 `~/.claude/skills`、`~/.codex/skills`、`~/.agents/skills`
+建立 junction；后者是多数其他 code agent（Cursor、Gemini CLI 等）读取 skill 的
+通用目录。某个目录不存在时会自动跳过。脚本幂等，随时可重跑。
 
 配置在非默认位置时传参：
 
@@ -71,6 +74,23 @@ cd $env:USERPROFILE\.skills   # 一定要在这个目录里跑脚本
 # 验证链接是否正确指向本仓库
 Get-Item $env:USERPROFILE\.claude\skills\python-quality | Select-Object LinkType, Target
 ```
+
+## 外部来源 skill（原样引入，以原仓库为准）
+
+`frontend-slides`、`repo-docs`、`repo-docs-zh` 不是自建的，是原样拷贝自其他人的
+开源仓库，本地不做任何修改：
+
+| Skill | 来源仓库 | 路径 |
+|---|---|---|
+| `frontend-slides` | https://github.com/zarazhangrui/frontend-slides | 仓库根目录（不含 `plugins/`，那是给 `/plugin` marketplace 用的打包镜像，内容跟 skill 本体重复） |
+| `repo-docs` | https://github.com/YurunChen/repo-docs-skills | `skills/repo-docs` |
+| `repo-docs-zh` | https://github.com/YurunChen/repo-docs-skills | `skills/repo-docs-zh` |
+
+**更新方式：** 直接用原仓库对应路径的内容整体覆盖本地目录即可，不需要 diff、不
+需要保留本地改动、不需要合并——因为本地从来没改过。AI 拉取更新时应以原仓库内容
+为唯一权威来源，发现不一致就以原仓库为准覆盖，而不是反向"修正"原仓库的写法。
+
+这三个 skill 基本不会主动更新，只有明确要求"检查/同步这三个 skill"时才去拉取。
 
 ## 不在本仓库的 skill
 

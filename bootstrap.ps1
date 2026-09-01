@@ -14,6 +14,10 @@
 .PARAMETER CodexDir
     Codex 的 skills 目录，默认 ~/.codex/skills。
 
+.PARAMETER AgentsDir
+    通用 agent skills 目录，默认 ~/.agents/skills。多数其他 code agent
+    （Cursor、Gemini CLI、Kode 等）会读取这个通用目录。
+
 .EXAMPLE
     .\bootstrap.ps1
     在默认位置建立链接。
@@ -24,7 +28,8 @@
 #>
 param(
     [string]$ClaudeDir = (Join-Path $env:USERPROFILE ".claude\skills"),
-    [string]$CodexDir = (Join-Path $env:USERPROFILE ".codex\skills")
+    [string]$CodexDir = (Join-Path $env:USERPROFILE ".codex\skills"),
+    [string]$AgentsDir = (Join-Path $env:USERPROFILE ".agents\skills")
 )
 
 $ErrorActionPreference = 'Stop'
@@ -57,7 +62,7 @@ Write-Host "源仓库: $repo"
 Write-Host "待链接 skill（$($skills.Count) 个）: $($skills -join ', ')"
 Write-Host ""
 
-foreach ($target in @($ClaudeDir, $CodexDir)) {
+foreach ($target in @($ClaudeDir, $CodexDir, $AgentsDir)) {
     if (-not (Test-Path $target)) {
         Write-Host "跳过 $target（目录不存在，该客户端未安装）" -ForegroundColor Yellow
         continue
