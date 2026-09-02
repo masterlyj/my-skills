@@ -1,0 +1,22 @@
+git-commit/SKILL.md
+  s_959b106188d435::t_5d88c79363446a 100
+  s_959b106188d435::t_fe59acc5e12093 178-179,222-223
+  s_959b106188d435::t_4297165ba885b5 3
+  s_959b106188d435::t_e427ff919d707c 289
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.43-trip",
+  "base_commit_sha": "0e59a02374fb240f85d536da8ab7270cc074819b",
+  "prompts": {},
+  "sessions": {
+    "s_959b106188d435": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4f5607f6-a1a8-4fa5-a8a3-b10b374970a6",
+        "model": "ep-5e9quh5a"
+      },
+      "human_author": "masterlyj <167326996+masterlyj@users.noreply.github.com>"
+    }
+  }
+}
