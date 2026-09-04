@@ -25,6 +25,7 @@ junction，改一处三端同时生效，不会再出现副本各自漂移的问
 | Skill | 用途 |
 |---|---|
 | `exec-report-writing` | 技术材料转领导可读的汇报 |
+| `git-worktree-split` | 零接触拆分工作区部分改动到独立分支（worktree 隔离操作规程） |
 | `frontend-slides`² | 零依赖 HTML 演示文稿生成 |
 | `repo-docs`² | 仓库理解文档生成 |
 | `repo-docs-zh`² | `repo-docs` 的中文覆盖层 |
