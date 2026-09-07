@@ -1,0 +1,19 @@
+karpathy-guidelines/SKILL.md
+  s_49f9d025b14f06::t_0ae12205f6bc06 29-30
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.43-trip",
+  "base_commit_sha": "e7fbe8fefd7fac339d8d2ea0f260f1d30c21be9b",
+  "prompts": {},
+  "sessions": {
+    "s_49f9d025b14f06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "060d07e0-a8a8-405d-aee1-9bfda7e1a7e5",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "masterlyj <167326996+masterlyj@users.noreply.github.com>"
+    }
+  }
+}
