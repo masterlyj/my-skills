@@ -1,0 +1,36 @@
+langchain-guide/SKILL.md
+  s_085866d355a1e6::t_9c130d2db64a88 24-26
+  s_085866d355a1e6::t_aebfaef57c5eb3 263-308
+  s_085866d355a1e6::t_c4bb8e7f9a72ec 362-391,397
+  s_085866d355a1e6::t_40349ad413a568 392-396
+  s_085866d355a1e6::t_d35076c715a275 14-17,33-34,58,81,105-112,136-137,154-235,313,339,355,400,415-417,474-482
+  s_085866d355a1e6::t_bfd9a0e4f2fedf 236-249,251-261
+  s_085866d355a1e6::t_6546d6ba1c21c3 421-472
+  s_085866d355a1e6::t_d5c624c56869b6 493-501
+  s_085866d355a1e6::t_9e4861fe8f2acc 11-12
+  s_085866d355a1e6::t_0db1d3a5309bb1 28
+  s_085866d355a1e6::t_c4cc46c2168ff8 2,8-10,22-23,27,31-32,38-55,59-80,82-104,114-134,138-153,262,309-310,312,314-338,340-352,357-361,398-399,401-414,483-489
+  s_085866d355a1e6::t_8a6248aec09f86 3
+  s_085866d355a1e6::t_96ab6e128ddd53 311
+  s_085866d355a1e6::t_8ca77c3c8c7230 502-503
+  s_085866d355a1e6::t_43be15485c702f 250
+  s_085866d355a1e6::t_7ef5616296e715 4
+README.md
+  s_085866d355a1e6::t_126d09c2fe97c5 29
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.43-trip",
+  "base_commit_sha": "0e26134304f916d81ce7fd839d74c07a374b312d",
+  "prompts": {},
+  "sessions": {
+    "s_085866d355a1e6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a65a190f-c407-45d2-b614-2e516dd269b6",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "masterlyj <167326996+masterlyj@users.noreply.github.com>"
+    }
+  }
+}
