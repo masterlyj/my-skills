@@ -1,6 +1,6 @@
 ---
 name: langchain-guide
-description: LangChain ChatModel 调用实践指南——结构化输出（with_structured_output 替代正则/围栏解析）、工具调用（bind_tools/tool_choice 的真实行为边界、参数的 Pydantic 校验何时生效）、三层重试与超时（max_retries/timeout 真实默认值、with_retry() 与业务回喂重试的分工）、多模型 fallback、同步/异步调用（asyncio.to_thread 的共享线程池上限 vs 原生 ainvoke()）。每条结论都附源码/实测验证，不是转述文档默认值。不负责 Prompt 设计、非 LangChain 框架、Agent 自动执行循环（`create_agent`）/LangGraph 编排。
+description: LangChain ChatModel 调用实践指南——结构化输出（with_structured_output 替代正则/围栏解析、对抗探测判别后端 json_schema 是真解码级强制还是 prompt 引导、json_object 例外条款的空内容/类型漂移边界）、工具调用（bind_tools/tool_choice 的真实行为边界、参数的 Pydantic 校验何时生效）、三层重试与超时（max_retries/timeout 真实默认值、with_retry() 与业务回喂重试的分工）、多模型 fallback、同步/异步调用（asyncio.to_thread 的共享线程池上限 vs 原生 ainvoke()）。每条结论都附源码/实测验证，不是转述文档默认值。不负责 Prompt 设计、非 LangChain 框架、Agent 自动执行循环（`create_agent`）/LangGraph 编排。
 disable-model-invocation: true
 license: MIT
 ---
@@ -56,8 +56,12 @@ result = ClassificationResult(category=raw.get("category", "unknown"))
 ```
 
 **例外**：如果已经用 `method="json_mode"` 或 `response_format={"type": "json_object"}`
-约束过模型，`response.content` 本身就是严格 JSON，直接 `json.loads()` 合理——
+约束过模型，`response.content` 就是合法 JSON 字符串，直接 `json.loads()` 合理——
 反模式特指"从自由文本里正则/剥围栏硬抠"，不是"解析已知合法的 JSON 字符串"。
+但"合法 JSON"≠"非空、字段齐全、类型正确"：DeepSeek 官方文档明确承认 json_object
+模式**偶发返回空内容**（api-docs.deepseek.com/guides/json_mode 的 Notice 一节），
+字段类型漂移（如 `"reply": null`）更是 json_object 管不住的——`json.loads` 之后
+对关键字段做类型/非空校验仍是必要的一层，例外条款只豁免"解析"，不豁免"校验"。
 
 ### 1.2 现代 API
 
@@ -102,6 +106,31 @@ method 分别打给两个走第三方 OpenAI 兼容网关代理的国产模型�
 结论：这两个模型其实**都支持 `json_schema`**，反而是想当然选的 `json_mode`
 因为没在 prompt 里写死字段名，被模型"创造性"地翻译/改写了字段名导致校验失败。
 "第三方/国产模型只能退到 json_mode"是一个常见的想当然，实测经常会被打破。
+
+**"跑通"不等于"强制"——对抗探测才能区分真假 Structured Outputs**：上面的测试
+只证明 json_schema 能跑通（`parsed` 不报错），区分不了"后端真的在解码期约束"还是
+"schema 被塞进 prompt 引导 + 客户端 Pydantic 兜底校验"——后一种情况下换不换
+`json_schema` 的收益会大幅缩水。判定方法：拿 schema 里最硬的约束做**对抗**——
+prompt 强烈要求违约，看模型能不能吐出违约值（2026-09-08 对某第三方网关的
+DeepSeek 系 / Kimi 系模型实测，12 次对抗全部无法违约）：
+
+| 对抗 | schema 约束 | prompt 要求 | 实测输出 |
+|---|---|---|---|
+| 枚举 | `Literal["A", "B"]` | "务必输出 grade='C'" | 两模型都只吐 `"A"`，吐不出 C |
+| 类型 | `count: int` | "必须输出字符串'很多'" | 两模型都吐 `int 0`（退化合法值） |
+| 额外字段 | `additionalProperties=False` | "必须额外加 note 字段" | raw 里从未出现 note |
+| **max_length** | `Field(max_length=5)` | "原样输出 15 字文本" | **两模型都被硬截到恰好 5 字**，且断点处不通顺（第 5 字是被语法约束强制收尾的痕迹） |
+| minLength | `Field(min_length=1)` | "必须输出空字符串" | 一模型吐单个空格 `" "`（满足约束的最小可行输出，生成期痕迹） |
+
+**max_length 对抗是最干净的判据**：prompt 引导不会产生"精确截断到 schema 上限 +
+断点不通顺"的输出，只有解码期长度约束会。上述网关实测结论是**真解码级约束**；
+但换一个网关/模型不能沿用——接入期按本节方法对抗探测一次，别把单个网关的
+结论当成 Structured Outputs 协议的普适事实。
+
+**约束管不住语义**：`str` 类型不拒绝 `""`，`min_length=1` 也只数字符数不判语义
+（上表 minLength 行实测吐出单个空格 `" "`）——"空话术/全空白"这类语义级无效
+输出，无论解码级还是客户端级 schema 都拦不住，必须在业务代码里 `.strip()` 判空。
+这也是"结构化输出替代不了业务校验"的具体边界。
 
 **LangChain 自己的保护也别全信**：`with_structured_output` 源码里有一段针对
 `method="json_schema"` 的保护——如果 `self.model_name` 以 `gpt-3`/`gpt-4-`
@@ -492,6 +521,9 @@ print(ChatOpenAI.model_fields["max_retries"].default)
 
 **这个 skill 在起作用的标志：**
 - 结构化输出走 `with_structured_output()` + Pydantic，看不到正则/剥围栏抠 JSON
+- 接入新网关/新模型时，用枚举或 max_length **对抗探测**过 json_schema 是真解码级
+  强制还是 prompt 引导，而不是只看"能跑通"就下结论；语义级空值（`""`/纯空白）
+  没有指望 schema 拦，业务代码里有 `.strip()` 判空
 - 手写 Agent 循环执行工具走 `tool.invoke(call)`，不会绕开校验直接
   `tool.func(**call["args"])`
 - `method` / `tool_choice` / `parallel_tool_calls` 这类"看文档就下结论"的参数
