@@ -26,7 +26,7 @@ junction，改一处三端同时生效，不会再出现副本各自漂移的问
 |---|---|
 | `exec-report-writing` | 技术材料转领导可读的汇报 |
 | `git-worktree-split` | 零接触拆分工作区部分改动到独立分支（worktree 隔离操作规程） |
-| `qa-knowledge-organizer` | 把项目材料整理成以记忆为中心的 QA（金字塔记忆地图 + 【Q】【核心答案】【展开说明】【关键词锚点】四段式） |
+| `qa-knowledge-organizer` | 把材料整理成以记忆为中心的 QA（`qa/README.md` 作金字塔顶层，每域一文件，四段式答案 + 关键词锚点） |
 | `langchain-guide` | LangChain ChatModel 调用实践（结构化输出、工具调用与参数校验、三层重试/超时、多模型 fallback、同步/异步调用） |
 | `frontend-slides`² | 零依赖 HTML 演示文稿生成 |
 | `repo-docs`² | 仓库理解文档生成 |
