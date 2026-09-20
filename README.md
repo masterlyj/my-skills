@@ -131,23 +131,62 @@ Get-ChildItem $env:USERPROFILE\.agents\skills\ -Force |
 | `domain-modeling` | 同上 | `skills/engineering/` |
 | `research` | 同上 | `skills/engineering/` |
 | `resolving-merge-conflicts` | 同上 | `skills/engineering/` |
+| `aihot` | [KKKKhazix/khazix-skills](https://github.com/KKKKhazix/khazix-skills) | `aihot/` |
 
-清单记录在 `~/.skills-vendor/.vendor.json`（含上游地址、分支、上次同步的 commit
-和各 skill 的原始桶路径）。要增删 skill，改这个文件的 `skills` 字段。
+清单记录在 `~/.skills-vendor/.vendor.json`，**多上游**结构如下：
+
+```json
+{
+  "sources": {
+    "owner/repo": {
+      "repo": "https://github.com/owner/repo.git",
+      "branch": "main",
+      "upstreamCommit": "<上次同步的 commit>",
+      "syncedAt": "<上次同步时间>",
+      "skills": { "<本地名>": "<上游桶路径>" }
+    }
+  }
+}
+```
+
+要增删 skill，改对应 source 的 `skills` 字段；要增减上游，改 `sources` 顶层键
+（key 用 `owner/repo`）。
 
 **同步上游：**
 
 ```powershell
 cd $env:USERPROFILE\.skills
-.\sync-vendor.ps1              # 同步 + 重建链接；本地有改动时停下询问
-.\sync-vendor.ps1 -Force       # 无条件覆盖
-.\sync-vendor.ps1 -SkipBootstrap  # 只同步文件，不重建链接
+.\sync-vendor.ps1                          # 同步全部上游 + 重建链接
+.\sync-vendor.ps1 -Only "owner/repo"       # 只同步指定上游
+.\sync-vendor.ps1 -Force                   # 无条件覆盖
+.\sync-vendor.ps1 -SkipBootstrap           # 只同步文件，不重建链接
 ```
 
-上游 commit 未变时脚本会提前退出，不会无谓覆盖。
+每个上游的 commit 未变时会单独跳过，不会无谓覆盖；其余上游照常处理。
 
 > ⚠️ **vendor 是上游镜像，不要直接改。** 同步时是「整目录删除再拷贝」，在 vendor
 > 里的任何修改都会丢失。这些 skill 一律以原仓库为准。
+
+> **运行时文件保护**：skill 目录下以 `.` 开头的隐藏文件视为**本机运行时状态**
+> （如 AIHOT 的 `.aihot-actor-id`），同步前备份、同步后还原，不会被覆盖或删除。
+> 上游包本身不应包含任何 dotfile。
+
+### `aihot` 的特殊说明
+
+aihot 的官方安装器（`install.sh`）会在发现目标目录是 symlink 时**主动报错退出**：
+
+```
+[[ ! -L "$INSTALL_DIR" ]] || fail "target is a symlink; ..."
+```
+
+本仓库把 aihot 装成 junction，因此**不能再跑官方 `install.sh` 更新**——请一律走
+`.\sync-vendor.ps1 -Only "KKKKhazix/khazix-skills"`。这也正是把它纳入 vendor
+统一管理的目的。
+
+- 上游仓库是**分发源目录**（含 `install.sh`、`README.md`、`manifest.sha256` 等），
+  vendor 按「整目录镜像」同步，多出的这几个文件无害，不参与 skill 运行。
+- `.aihot-actor-id` 是本机随机生成的匿名 UUID（仅用于跨渠道去重，非账号/密钥），
+  属运行时状态，同步时受上述保护机制保留。
 
 ### 方式二：内联在本仓库（上游不活跃时）
 
