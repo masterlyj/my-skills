@@ -35,17 +35,23 @@ param(
 $ErrorActionPreference = 'Stop'
 $repo = $PSScriptRoot
 
-# 移除已有条目。junction 必须用 Directory.Delete 只摘链接，
-# 否则 Remove-Item -Recurse 会顺着链接删掉仓库里的真实文件。
-function Remove-Existing {
+# 移除本脚本此前建立的链接。只摘链接本身，不碰内容——junction 必须用
+# Directory.Delete，Remove-Item -Recurse 会顺着链接删掉仓库里的真实文件。
+function Remove-Link {
     param([string]$Path)
-    $item = Get-Item $Path -Force
-    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
-        [System.IO.Directory]::Delete($Path, $false)
-    }
-    else {
-        Remove-Item $Path -Recurse -Force -Confirm:$false
-    }
+    [System.IO.Directory]::Delete($Path, $false)
+}
+
+# 判断目标是本脚本建的链接（可安全覆盖），还是别的工具管理的真实目录。
+# 目标目录里可能住着不受本仓库管理的 skill——例如 ~/.agents/skills 下的
+# lark-*，那些是 lark-cli 按 ~/.agents/.skill-lock.json 维护的真实目录。
+# 一旦仓库里出现同名 skill，覆盖前必须先确认这不是别人的东西：
+# 真实目录一律跳过并警告，绝不删除。
+function Test-IsOurLink {
+    param([string]$Path)
+    $item = Get-Item $Path -Force -ErrorAction SilentlyContinue
+    if (-not $item) { return $false }
+    return [bool]($item.Attributes -band [IO.FileAttributes]::ReparsePoint)
 }
 
 # 只把带 SKILL.md 的目录当作 skill，跳过 .git 等辅助目录。
@@ -69,11 +75,26 @@ foreach ($target in @($ClaudeDir, $CodexDir, $AgentsDir)) {
     }
 
     Write-Host "-> $target" -ForegroundColor Cyan
+    $skipped = @()
     foreach ($name in $skills) {
         $link = Join-Path $target $name
-        if (Test-Path $link) { Remove-Existing $link }
+        if (Test-Path $link) {
+            if (Test-IsOurLink $link) {
+                Remove-Link $link
+            }
+            else {
+                # 真实目录，不是本脚本建的——多半由别的工具管理。不能删。
+                Write-Host "   ! $name（已存在且非链接，跳过，未改动）" -ForegroundColor Yellow
+                $skipped += $name
+                continue
+            }
+        }
         New-Item -ItemType Junction -Path $link -Target (Join-Path $repo $name) | Out-Null
         Write-Host "   + $name"
+    }
+    if ($skipped) {
+        Write-Host "   跳过 $($skipped.Count) 个：$($skipped -join ', ')" -ForegroundColor Yellow
+        Write-Host "   这些是其他工具管理的真实目录，如需接管请先自行备份并删除。" -ForegroundColor Yellow
     }
 }
 
