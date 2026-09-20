@@ -1,10 +1,18 @@
 ﻿<#
 .SYNOPSIS
-    把本仓库的 skill 以 junction 方式链接到 Claude Code 和 Codex 的 skills 目录。
+    把自建与第三方 skill 以 junction 方式链接到各 code agent 的 skills 目录。
 
 .DESCRIPTION
-    本仓库是自建 skill 的唯一源。执行本脚本后，Claude Code 与 Codex 读到的都是
-    本仓库里的同一份文件，改一处三端同时生效。
+    有两个 skill 源：
+
+    - 本仓库（$PSScriptRoot）：自建 skill，纳入 git 管理。
+    - vendor 目录（见 -VendorDir）：第三方 skill，由 sync-vendor.ps1 从上游同步，
+      不纳入本仓库的 git 管理。
+
+    执行本脚本后，Claude Code、Codex、OpenCode 等读到的都是源目录里的同一份
+    文件，改一处多端同时生效。
+
+    同名冲突时自建优先：vendor 里与自建同名的 skill 会被跳过并提示。
 
     脚本幂等，可重复执行：已存在的链接或目录会先被安全移除再重建。
 
@@ -16,7 +24,11 @@
 
 .PARAMETER AgentsDir
     通用 agent skills 目录，默认 ~/.agents/skills。多数其他 code agent
-    （Cursor、Gemini CLI、Kode 等）会读取这个通用目录。
+    （Cursor、Gemini CLI、OpenCode、Kode 等）会读取这个通用目录。
+
+.PARAMETER VendorDir
+    第三方 skill 的源目录，默认 ~/.skills-vendor。目录不存在时自动跳过，
+    只处理自建 skill——因此该参数对未使用 vendor 的环境是向后兼容的。
 
 .EXAMPLE
     .\bootstrap.ps1
@@ -25,11 +37,16 @@
 .EXAMPLE
     .\bootstrap.ps1 -CodexDir "E:\cfg\.codex\skills"
     Codex 配置在非默认位置时指定路径。
+
+.EXAMPLE
+    .\bootstrap.ps1 -VendorDir "D:\vendor-skills"
+    从非默认位置读取第三方 skill。
 #>
 param(
     [string]$ClaudeDir = (Join-Path $env:USERPROFILE ".claude\skills"),
     [string]$CodexDir = (Join-Path $env:USERPROFILE ".codex\skills"),
-    [string]$AgentsDir = (Join-Path $env:USERPROFILE ".agents\skills")
+    [string]$AgentsDir = (Join-Path $env:USERPROFILE ".agents\skills"),
+    [string]$VendorDir = (Join-Path $env:USERPROFILE ".skills-vendor")
 )
 
 $ErrorActionPreference = 'Stop'
@@ -55,16 +72,49 @@ function Test-IsOurLink {
 }
 
 # 只把带 SKILL.md 的目录当作 skill，跳过 .git 等辅助目录。
-$skills = Get-ChildItem $repo -Directory |
-    Where-Object { Test-Path (Join-Path $_.FullName 'SKILL.md') } |
-    Select-Object -ExpandProperty Name
+function Get-SkillNames {
+    param([string]$Root)
+    if (-not (Test-Path $Root)) { return @() }
+    return @(Get-ChildItem $Root -Directory -Force |
+        Where-Object { Test-Path (Join-Path $_.FullName 'SKILL.md') } |
+        Select-Object -ExpandProperty Name)
+}
+
+$ownSkills = Get-SkillNames $repo
+$vendorSkills = Get-SkillNames $VendorDir
+
+# 自建优先：vendor 里与自建同名的直接剔除，并提示。
+$shadowed = @($vendorSkills | Where-Object { $ownSkills -contains $_ })
+$vendorSkills = @($vendorSkills | Where-Object { $ownSkills -notcontains $_ })
+
+# 记录每个 skill 的来源，建链接时按名字取对应根目录。
+$skillSource = @{}
+foreach ($n in $ownSkills) { $skillSource[$n] = $repo }
+foreach ($n in $vendorSkills) { $skillSource[$n] = $VendorDir }
+
+$skills = @($ownSkills + $vendorSkills | Sort-Object -Unique)
 
 if (-not $skills) {
-    Write-Host "仓库里没有找到任何 skill（缺 SKILL.md）" -ForegroundColor Red
+    Write-Host "没有找到任何 skill（缺 SKILL.md）" -ForegroundColor Red
+    Write-Host "  自建源: $repo" -ForegroundColor DarkGray
+    Write-Host "  vendor: $VendorDir" -ForegroundColor DarkGray
     exit 1
 }
 
-Write-Host "源仓库: $repo"
+Write-Host "自建源: $repo（$($ownSkills.Count) 个）"
+if (Test-Path $VendorDir) {
+    Write-Host "vendor: $VendorDir（$($vendorSkills.Count) 个）"
+}
+else {
+    Write-Host "vendor: $VendorDir（不存在，跳过）" -ForegroundColor DarkGray
+}
+if ($shadowed) {
+    Write-Host ""
+    Write-Host "! 以下 $($shadowed.Count) 个 skill 自建与 vendor 同名，已按自建优先处理：" -ForegroundColor Yellow
+    Write-Host "  $($shadowed -join ', ')" -ForegroundColor Yellow
+    Write-Host "  如需改用 vendor 版本，请移除自建目录或改用其他 -VendorDir。" -ForegroundColor Yellow
+}
+Write-Host ""
 Write-Host "待链接 skill（$($skills.Count) 个）: $($skills -join ', ')"
 Write-Host ""
 
@@ -89,7 +139,7 @@ foreach ($target in @($ClaudeDir, $CodexDir, $AgentsDir)) {
                 continue
             }
         }
-        New-Item -ItemType Junction -Path $link -Target (Join-Path $repo $name) | Out-Null
+        New-Item -ItemType Junction -Path $link -Target (Join-Path $skillSource[$name] $name) | Out-Null
         Write-Host "   + $name"
     }
     if ($skipped) {
