@@ -146,19 +146,8 @@ cd $env:USERPROFILE\.skills
 
 上游 commit 未变时脚本会提前退出，不会无谓覆盖。
 
-> ⚠️ **vendor 是上游镜像，不要直接改。** 同步时是「整目录删除再拷贝」，你在
-> vendor 里的任何修改都会丢失。要定制某个 skill，把它复制到本仓库再改（见下）。
-
-**定制某个 vendor skill：** 直接复制进本仓库，改完重跑 `bootstrap.ps1`：
-
-```powershell
-Copy-Item -Recurse $env:USERPROFILE\.skills-vendor\grilling $env:USERPROFILE\.skills\grilling
-# 编辑 .\grilling\... 之后
-.\bootstrap.ps1
-```
-
-`bootstrap.ps1` 的**自建优先**策略会让本仓库版本遮蔽 vendor 版本，并给出提示；
-vendor 里的原件继续跟随上游，不受影响。
+> ⚠️ **vendor 是上游镜像，不要直接改。** 同步时是「整目录删除再拷贝」，在 vendor
+> 里的任何修改都会丢失。这些 skill 一律以原仓库为准。
 
 ### 方式二：内联在本仓库（上游不活跃时）
 
