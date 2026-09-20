@@ -1,4 +1,0 @@
-interface:
-  display_name: "QA Knowledge Organizer"
-  short_description: "把代码项目整理成面试答辩用的记忆型 QA"
-  default_prompt: "Use $qa-knowledge-organizer to 把这个项目的材料整理成能背下来、能复述的 QA。"
