@@ -40,6 +40,7 @@ import mimetypes
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 DEFAULT_API_KEY_ENV = "VISION_API_KEY"
@@ -47,6 +48,10 @@ DEFAULT_API_KEY_ENV = "VISION_API_KEY"
 # 默认目标帧数。均匀采样下 30 帧足以覆盖 5-15 分钟视频；论文显示
 # 长视频场景帧数越多越准，需要更高保真时可调高到 60-100。
 DEFAULT_FRAME_COUNT = 30
+
+# 接口重试：批量解读会连打几十次请求，服务端偶发 5xx 是常态。
+MAX_RETRIES = 3
+RETRY_BACKOFF_SECONDS = 2.0
 
 # 清晰度权重高于亮度：模糊帧对 OCR 的伤害远大于偏暗帧。
 SHARPNESS_WEIGHT = 0.7
@@ -113,11 +118,15 @@ def ask_image(
         question: 要问的问题。也可直接传入 :data:`UNDERSTAND_PROMPT` 或
             :data:`OCR_PROMPT` 做整图解读。
         model: 模型名。
-        timeout: 请求超时秒数。
+        timeout: 单次请求的超时秒数。
 
     Returns:
         模型返回的文本内容。
+
+    Raises:
+        RuntimeError: 请求失败且重试耗尽时抛出，消息中含 HTTP 状态码或原因。
     """
+    import urllib.error
     import urllib.request
 
     path = Path(image_path)
@@ -152,9 +161,38 @@ def ask_image(
         },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-    return data["choices"][0]["message"]["content"]
+
+    # 批量解读会连打几十次请求，服务端偶发 5xx / 超时是常态，不重试会让
+    # 整个批次白跑。只重试可恢复的错误：4xx（密钥错、参数错）重试无意义。
+    last_error = ""
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            return data["choices"][0]["message"]["content"]
+        except urllib.error.HTTPError as exc:
+            if exc.code < 500:
+                raise RuntimeError(
+                    f"请求被拒绝（HTTP {exc.code}）: {exc.reason}。"
+                    f"请检查 VISION_API_KEY 与模型名，重试不会解决。"
+                ) from exc
+            last_error = f"HTTP {exc.code} {exc.reason}"
+        except (urllib.error.URLError, TimeoutError) as exc:
+            last_error = f"网络错误 {exc}"
+        except OSError as exc:
+            # SSLError、连接重置等属于 OSError 但不属于 URLError，同样可重试。
+            last_error = f"连接错误 {exc}"
+
+        if attempt < MAX_RETRIES:
+            wait = RETRY_BACKOFF_SECONDS * (2**attempt)
+            print(
+                f"  请求失败（{last_error}），{wait:.0f}s 后重试 "
+                f"({attempt + 1}/{MAX_RETRIES})...",
+                file=sys.stderr,
+            )
+            time.sleep(wait)
+
+    raise RuntimeError(f"请求失败，已重试 {MAX_RETRIES} 次: {last_error}")
 
 
 def _video_duration(video_path: Path) -> float:
