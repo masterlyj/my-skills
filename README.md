@@ -35,8 +35,11 @@ junction，改一处多端同时生效，不会再出现副本各自漂移的问
 | `frontend-slides`² | 零依赖 HTML 演示文稿生成 |
 | `repo-docs`² | 仓库理解文档生成 |
 | `repo-docs-zh`² | `repo-docs` 的中文覆盖层 |
+| `content-clipper`³ | 抓取 B站视频 / 小红书帖子，转录语音、解读画面，整理为 Markdown 笔记 |
 
 ² 标记的三个是原样引入的外部 skill，见下方「外部来源 skill」。
+
+³ `content-clipper` 是**项目级 skill**，不参与全局挂载，见下方「项目级 skill」。
 
 ## 仓库位置
 
@@ -100,6 +103,92 @@ Get-ChildItem $env:USERPROFILE\.agents\skills\ -Force |
 > `~/.agents/skills/` 下住着 `lark-*` 等**真实目录**（由 `lark-cli` 管理），
 > 所以第二条命令的输出**非空是正常的**——只需确认其中没有本仓库或 vendor 的
 > skill 名即可。`bootstrap.ps1` 遇到非链接目录会跳过并警告，不会删除它们。
+
+## 项目级 skill
+
+大多数 skill 是**全局**的：`bootstrap.ps1` 把它们挂到 `~/.claude/skills`、
+`~/.agents/skills`，任何项目都能用。
+
+有一类 skill 不适合全局——它们依赖**具体项目的数据或环境**，全局化会造成误导。
+这类 skill **源码仍在本仓库**（统一版本管理），但**不参与全局挂载**，由各项目
+按需手动建立链接。
+
+`content-clipper` 是第一个这类 skill：它把笔记写到当前项目的 `clips/`，
+并依赖项目自己的 Python 环境，全局挂载毫无意义。
+
+### 排除机制
+
+`bootstrap.ps1` 顶部的 `$SkipSkills` 参数列出这类 skill：
+
+```powershell
+[string[]]$SkipSkills = @("content-clipper")
+```
+
+脚本会跳过它们，输出提示「跳过项目级 skill（不建全局链接）」。要新增一个
+项目级 skill，把名字加进这个数组即可。
+
+### 在项目里启用
+
+项目级 skill 要**手动**在项目内建立链接，且要覆盖各客户端读的目录：
+
+| 客户端 | 项目级读取路径 |
+|---|---|
+| Claude Code | `.claude/skills/`（**只认这个**） |
+| OpenCode | `.opencode/skills`、`.claude/skills`、`.agents/skills`（都认） |
+
+**`.claude/skills/` 是两者的最小公约数**——只需建一个链接：
+
+```powershell
+# 在项目根执行
+$skill = "content-clipper"
+New-Item -ItemType Directory -Path ".claude\skills" -Force
+New-Item -ItemType Junction `
+  -Path ".claude\skills\$skill" `
+  -Target "$env:USERPROFILE\.skills\$skill"
+```
+
+链接是**本机状态**，应写进项目的 `.gitignore`：
+
+```gitignore
+.claude/skills/content-clipper
+```
+
+> 不要用符号链接（`New-Item -ItemType SymbolicLink`）。本机未开开发者模式，
+> 符号链接会静默退化成复制目录，之后改动不再同步。Junction 是普通用户可建
+> 且始终是真链接。
+
+### 手动调用，不自动触发
+
+项目级 skill 一律**关闭模型的自动触发**，避免在无关项目里误用。两个客户端
+各有自己的字段，写在同一个 frontmatter 里即可：
+
+```yaml
+---
+name: content-clipper
+description: ...
+disable-model-invocation: true   # Claude Code：关闭自动触发
+metadata:
+  opencode/autoinvoke: false     # OpenCode：关闭自动触发
+---
+```
+
+调用方式：
+
+| 客户端 | 怎么调用 |
+|---|---|
+| Claude Code | `/content-clipper` |
+| OpenCode | 直接说出 `content-clipper` 这个名字（模型看到 ID 后调用 skill 工具） |
+
+> `autoinvoke: false` 只是把 skill 从模型的**可用列表**里隐藏，它仍然注册在案，
+> 可以用 ID 显式加载。这正好是「手动调用」想要的语义。
+
+### 环境依赖由使用方自备
+
+项目级 skill **不自带 Python 环境**，也不假定环境装在哪。需要什么依赖、怎么装，
+写在 skill 的「步骤 0：环境自检」里；脚本调用一律用**激活后的 `python`**，
+不写死解释器路径。
+
+---
 
 ## 外部来源 skill
 
