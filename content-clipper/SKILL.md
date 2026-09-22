@@ -56,10 +56,6 @@ uv pip install --python .venv\Scripts\python.exe nvidia-cublas-cu12 nvidia-cudnn
 | curl | `Get-Command curl.exe` | Windows 10+ 自带 |
 | `VISION_API_KEY` | `$env:VISION_API_KEY` | 画面理解需要；未设置则跳过并说明 |
 
-> ⚠️ **ffmpeg PATH 陷阱**：winget 新装的 ffmpeg 对**已打开的 shell 不可见**，
-> BBDown 内部调用会直接报「找不到 ffmpeg」。**重启终端**，或把 ffmpeg 目录
-> 显式加进当前进程 PATH。
->
 > ⚠️ **CUDA 库陷阱**：`pip` 装的 nvidia 库不会自动进 PATH，转录前需要：
 > ```powershell
 > # 注意取 [1]：venv 下 getsitepackages() 返回 [venv根, venv\Lib\site-packages]，
@@ -70,6 +66,8 @@ uv pip install --python .venv\Scripts\python.exe nvidia-cublas-cu12 nvidia-cudnn
 > $env:PATH = ($nv -join ';') + ";$env:PATH"
 > ```
 > 报 `cublas64_12.dll is not found` 就是这一步没做。
+
+> winget 新装的命令行工具对**已打开的 shell 不可见**，报「找不到 xxx」时重开终端即可。
 
 **这个仓库的某个项目里可能已经搭好环境**——先看看项目根有没有 `.venv/`，
 有就激活它，不必重建。
