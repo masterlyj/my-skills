@@ -62,8 +62,12 @@ uv pip install --python .venv\Scripts\python.exe nvidia-cublas-cu12 nvidia-cudnn
 >
 > ⚠️ **CUDA 库陷阱**：`pip` 装的 nvidia 库不会自动进 PATH，转录前需要：
 > ```powershell
-> $sp = (python -c "import site; print(site.getsitepackages()[0])")
-> $env:PATH = "$sp\nvidia\cublas\bin;$sp\nvidia\cudnn\bin;$sp\nvidia\cuda_nvrtc\bin;$env:PATH"
+> # 注意取 [1]：venv 下 getsitepackages() 返回 [venv根, venv\Lib\site-packages]，
+> # nvidia 库在后者里，取 [0] 会拼不到路径。
+> $sp = (python -c "import site; print(site.getsitepackages()[1])")
+> $nv = Get-ChildItem "$sp\nvidia" -Directory -ErrorAction SilentlyContinue |
+>       ForEach-Object { "$($_.FullName)\bin" }
+> $env:PATH = ($nv -join ';') + ";$env:PATH"
 > ```
 > 报 `cublas64_12.dll is not found` 就是这一步没做。
 
