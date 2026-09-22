@@ -50,7 +50,7 @@ def transcribe(
     language: str | None = "zh",
     beam_size: int = 5,
     vad_filter: bool = True,
-) -> list[str]:
+) -> tuple[list[str], float, float]:
     """把 wav 文件转录为带时间戳的文本行。
 
     Args:
@@ -65,11 +65,9 @@ def transcribe(
         vad_filter: 是否用 VAD 先剔除静音段。纯音乐/演唱类素材建议关闭。
 
     Returns:
-        每行形如 ``[HH:MM:SS] 文本`` 的字符串列表。**可能为空**——整段音频被 VAD
-        判为无人声、或确实没有语音时返回空列表，调用方需自行判断。
-
-    Raises:
-        RuntimeError: 音频超过 30 秒但 VAD 未找到任何语音段时抛出。
+        ``(lines, duration, duration_after_vad)`` 三元组：文本行列表，以及音频的
+        总时长与经 VAD 过滤后的有效时长（秒）。``lines`` **可能为空**，此时比较
+        两个时长即可判断是「整段被 VAD 判为无人声」还是「几乎没有音频」。
     """
     from faster_whisper import WhisperModel
 
@@ -84,6 +82,9 @@ def transcribe(
         language=language,
         vad_filter=vad_filter,
         beam_size=beam_size,
+        # 关闭「用前文当提示」：开启时静音段会以前文为条件解码，产出语法通顺但
+        # 凭空捏造的文本。用 --no-vad 处理静音素材时尤其危险。
+        condition_on_previous_text=False,
     )
 
     print(
@@ -97,7 +98,7 @@ def transcribe(
         minutes, seconds = divmod(rem, 60)
         stamp = f"[{hours:02d}:{minutes:02d}:{seconds:02d}]"
         lines.append(f"{stamp} {seg.text.strip()}")
-    return lines
+    return lines, info.duration, info.duration_after_vad
 
 
 def _describe_error(exc: Exception, device: str) -> str:
@@ -111,24 +112,19 @@ def _describe_error(exc: Exception, device: str) -> str:
         device: 本次使用的计算设备。
 
     Returns:
-        面向用户的排查提示；无已知特征时返回通用说明。
+        面向用户的排查提示；无已知特征时返回空字符串，由调用方只打印原始错误。
     """
     msg = str(exc).lower()
-    if "no clip timestamps" in msg:
-        return (
-            "整段音频在 VAD 过滤后没有剩下任何语音（常见于纯音乐、演唱或环境音）。"
-            "可加 --no-vad 关闭过滤重试；若仍为空，说明该音频确实无人声。"
-        )
     if "cublas" in msg or "cudnn" in msg:
         return (
             "CUDA 运行库缺失。请确认 nvidia cublas/cudnn 的 bin 目录已加入 PATH，"
             "或改用 --device cpu 重试。"
         )
-    if "invalid model" in msg or "not found" in msg or "is not available" in msg:
-        return "模型规格或文件不存在。请检查 --model 取值，或确认模型已下载。"
-    if device == "cuda":
-        return "可尝试改用 --device cpu 排除 CUDA 环境问题。"
-    return ""
+    if "invalid model" in msg or "is not a valid language" in msg:
+        return "模型规格或语言代码不合法，请检查 --model 与 --language 的取值。"
+    # 兜底不再猜测病因：未知错误提示换 CPU 往往答非所问（例如语言码笔误），
+    # 只保留设备信息供使用者自行判断。
+    return f"（当前 --device {device}，原始错误见上）" if device == "cuda" else ""
 
 
 def main() -> int:
@@ -173,11 +169,13 @@ def main() -> int:
         print(f"错误: 找不到文件 {args.wav}", file=sys.stderr)
         return 1
 
-    language = None if args.language.lower() == "auto" else args.language
+    # faster-whisper 的语言码严格区分大小写，统一转小写避免 --language ZH 这类笔误。
+    normalized = args.language.lower()
+    language = None if normalized == "auto" else normalized
 
     started = time.time()
     try:
-        lines = transcribe(
+        lines, duration, duration_after_vad = transcribe(
             args.wav,
             model_size=args.model,
             device=args.device,
@@ -198,19 +196,28 @@ def main() -> int:
     # 进而写出一份空笔记。
     if not lines:
         print("转录失败: 未得到任何文本段。", file=sys.stderr)
-        print(
-            "提示: 该音频可能确实无人声，或整段被 VAD 过滤。可加 --no-vad 重试。",
-            file=sys.stderr,
-        )
+        # 用 VAD 过滤量区分两种情况，避免给出无效建议。
+        removed = duration - duration_after_vad
+        if removed > 1.0:
+            print(
+                f"提示: 总时长 {duration:.0f}s，VAD 过滤后仅剩 {duration_after_vad:.1f}s，"
+                f"即该音频几乎全是静音或非人声。可加 --no-vad 重试，但结果大概率仍无意义。",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"提示: 总时长 {duration:.1f}s，VAD 未过滤掉内容，说明音频本身过短或损坏。",
+                file=sys.stderr,
+            )
         return 1
 
     payload = "\n".join(lines)
     if args.output:
         Path(args.output).write_text(payload, encoding="utf-8")
-        print(f"已写入 {args.output}（{len(lines)} 段，{elapsed:.1f}s）", file=sys.stderr)
+        print(f"已写入 {args.output}（{len(lines)} 段）", file=sys.stderr)
     else:
         print(payload)
-    print(f"完成: {len(lines)} 段，耗时 {elapsed:.1f}s", file=sys.stderr)
+    print(f"完成: {len(lines)} 段，总耗时 {elapsed:.1f}s（含模型加载）", file=sys.stderr)
     return 0
 
 
