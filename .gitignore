@@ -16,3 +16,7 @@ $RECYCLE.BIN/
 # 临时文件
 *.tmp
 *.bak
+
+# Python 缓存（skill 的 scripts/ 下运行脚本时产生）
+__pycache__/
+*.pyc
