@@ -46,7 +46,10 @@ param(
     [string]$ClaudeDir = (Join-Path $env:USERPROFILE ".claude\skills"),
     [string]$CodexDir = (Join-Path $env:USERPROFILE ".codex\skills"),
     [string]$AgentsDir = (Join-Path $env:USERPROFILE ".agents\skills"),
-    [string]$VendorDir = (Join-Path $env:USERPROFILE ".skills-vendor")
+    [string]$VendorDir = (Join-Path $env:USERPROFILE ".skills-vendor"),
+    # 只做项目级、不参与全局挂载的 skill。它们仍在本仓库里受版本管理，
+    # 由各项目按需手动建 junction 引用，见 README 的「项目级 skill」。
+    [string[]]$SkipSkills = @("content-clipper")
 )
 
 $ErrorActionPreference = 'Stop'
@@ -82,6 +85,15 @@ function Get-SkillNames {
 
 $ownSkills = Get-SkillNames $repo
 $vendorSkills = Get-SkillNames $VendorDir
+
+# 剔除只做项目级的 skill：它们不进任何全局 skills 目录，避免被所有项目看到。
+if ($SkipSkills) {
+    $skipped = @($ownSkills | Where-Object { $SkipSkills -contains $_ })
+    if ($skipped) {
+        Write-Host "跳过项目级 skill（不建全局链接）：$($skipped -join ', ')" -ForegroundColor DarkGray
+    }
+    $ownSkills = @($ownSkills | Where-Object { $SkipSkills -notcontains $_ })
+}
 
 # 自建优先：vendor 里与自建同名的直接剔除，并提示。
 $shadowed = @($vendorSkills | Where-Object { $ownSkills -contains $_ })
