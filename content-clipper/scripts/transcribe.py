@@ -26,7 +26,7 @@ ffmpeg 步骤），并已把 CUDA 运行时库目录加进 PATH（否则会报 c
 输出默认写 stdout；指定 ``--output`` 时写文件而不打印正文。进度与诊断信息
 一律走 stderr。
 
-退出码：0 成功，1 输入或结果为空，2 转录失败。报告的耗时包含模型加载，
+退出码：0 成功，1 输入或结果为空，2 参数、转录或输出失败。报告的耗时包含模型加载，
 首次运行还会包含模型下载——判断模型规格开销时请以第二次运行为准。
 """
 
@@ -37,8 +37,7 @@ import sys
 import time
 from pathlib import Path
 
-# faster-whisper 的 compute_type 不支持在 CUDA 上直接做 int8，
-# float16 是 GPU 上速度与精度的平衡点；CPU 上则用 int8 最快。
+# 显式固定计算精度，避免不同设备的默认精度改变性能与显存需求。
 GPU_COMPUTE_TYPE = "float16"
 CPU_COMPUTE_TYPE = "int8"
 
@@ -67,16 +66,24 @@ def transcribe(
     Returns:
         ``(lines, duration, duration_after_vad)`` 三元组：文本行列表，以及音频的
         总时长与经 VAD 过滤后的有效时长（秒）。``lines`` **可能为空**，此时比较
-        两个时长即可判断是「整段被 VAD 判为无人声」还是「几乎没有音频」。
+        两个时长可了解 VAD 过滤量，但不能仅凭时长断定无语音或文件损坏。
+
+    Raises:
+        ValueError: 设备不受支持或束搜索宽度不是正数。
+        ImportError: 当前 Python 环境未安装 faster-whisper。
+        OSError: 音频或模型文件无法读取。
+        RuntimeError: 模型加载或转录失败。
     """
+    if device not in {"cuda", "cpu"} or beam_size <= 0:
+        raise ValueError("device 必须是 cuda 或 cpu，beam_size 必须大于 0。")
     from faster_whisper import WhisperModel
 
     compute_type = GPU_COMPUTE_TYPE if device == "cuda" else CPU_COMPUTE_TYPE
     # 首次运行会联网下载模型，耗时可能达数分钟，这里给出提示避免用户误以为卡死。
     print(f"加载模型 {model_size}（首次运行需下载）...", file=sys.stderr)
-    load_started = time.time()
+    load_started = time.perf_counter()
     model = WhisperModel(model_size, device=device, compute_type=compute_type)
-    print(f"模型就绪，耗时 {time.time() - load_started:.1f}s", file=sys.stderr)
+    print(f"模型就绪，耗时 {time.perf_counter() - load_started:.1f}s", file=sys.stderr)
     segments, info = model.transcribe(
         wav_path,
         language=language,
@@ -94,10 +101,13 @@ def transcribe(
 
     lines: list[str] = []
     for seg in segments:
+        text = seg.text.strip()
+        if not text:
+            continue
         hours, rem = divmod(int(seg.start), 3600)
         minutes, seconds = divmod(rem, 60)
         stamp = f"[{hours:02d}:{minutes:02d}:{seconds:02d}]"
-        lines.append(f"{stamp} {seg.text.strip()}")
+        lines.append(f"{stamp} {text}")
     return lines, info.duration, info.duration_after_vad
 
 
@@ -112,7 +122,7 @@ def _describe_error(exc: Exception, device: str) -> str:
         device: 本次使用的计算设备。
 
     Returns:
-        面向用户的排查提示；无已知特征时返回空字符串，由调用方只打印原始错误。
+        面向用户的排查提示；未知 CUDA 错误仅补充设备信息，其余返回空字符串。
     """
     msg = str(exc).lower()
     if "cublas" in msg or "cudnn" in msg:
@@ -127,12 +137,21 @@ def _describe_error(exc: Exception, device: str) -> str:
     return f"（当前 --device {device}，原始错误见上）" if device == "cuda" else ""
 
 
-def main() -> int:
-    """命令行入口，解析参数、执行转录并输出结果。
+def main(argv: list[str] | None = None) -> int:
+    """解析命令行参数、执行转录并输出结果。
+
+    Args:
+        argv: 命令行参数；省略时读取进程参数。
 
     Returns:
-        进程退出码：0 成功，1 输入或结果为空，2 转录失败。
+        进程退出码：0 成功，1 输入或结果为空，2 转录或输出失败。
     """
+    if sys.platform == "win32":
+        # 在解析参数前设置编码，让帮助和参数错误也能正确输出中文。
+        for stream in (sys.stdout, sys.stderr):
+            if hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8")
+
     parser = argparse.ArgumentParser(description="faster-whisper 音视频转录")
     parser.add_argument("wav", help="待转录的 wav 文件路径")
     parser.add_argument("--model", default="small", help="模型规格，默认 small")
@@ -158,12 +177,9 @@ def main() -> int:
     parser.add_argument(
         "--output", default=None, help="结果写入的文件，默认写 stdout"
     )
-    args = parser.parse_args()
-
-    if sys.platform == "win32":
-        # 两个流都要重设：诊断信息走 stderr，Windows 默认 GBK 会把中文打成乱码。
-        sys.stdout.reconfigure(encoding="utf-8")
-        sys.stderr.reconfigure(encoding="utf-8")
+    args = parser.parse_args(argv)
+    if args.beam_size <= 0:
+        parser.error("--beam-size 必须大于 0")
 
     if not Path(args.wav).is_file():
         print(f"错误: 找不到文件 {args.wav}", file=sys.stderr)
@@ -173,7 +189,7 @@ def main() -> int:
     normalized = args.language.lower()
     language = None if normalized == "auto" else normalized
 
-    started = time.time()
+    started = time.perf_counter()
     try:
         lines, duration, duration_after_vad = transcribe(
             args.wav,
@@ -183,6 +199,9 @@ def main() -> int:
             beam_size=args.beam_size,
             vad_filter=not args.no_vad,
         )
+    except ImportError as exc:
+        print(f"转录依赖不可用: {exc}。请检查当前 Python 环境。", file=sys.stderr)
+        return 2
     except (RuntimeError, ValueError, OSError) as exc:
         print(f"转录失败: {exc}", file=sys.stderr)
         hint = _describe_error(exc, args.device)
@@ -190,7 +209,7 @@ def main() -> int:
             print(f"提示: {hint}", file=sys.stderr)
         return 2
 
-    elapsed = time.time() - started
+    elapsed = time.perf_counter() - started
 
     # 空结果必须当成失败：否则下游会把「没转出内容」误当作「该音频无语音」，
     # 进而写出一份空笔记。
@@ -201,19 +220,23 @@ def main() -> int:
         if removed > 1.0:
             print(
                 f"提示: 总时长 {duration:.0f}s，VAD 过滤后仅剩 {duration_after_vad:.1f}s，"
-                f"即该音频几乎全是静音或非人声。可加 --no-vad 重试，但结果大概率仍无意义。",
+                "请核对原音频是否有语音；确认有语音后可用 --no-vad 对比。",
                 file=sys.stderr,
             )
         else:
             print(
-                f"提示: 总时长 {duration:.1f}s，VAD 未过滤掉内容，说明音频本身过短或损坏。",
+                f"提示: 总时长 {duration:.1f}s，VAD 过滤量不明显。请检查音频内容与语言设置。",
                 file=sys.stderr,
             )
         return 1
 
     payload = "\n".join(lines)
     if args.output:
-        Path(args.output).write_text(payload, encoding="utf-8")
+        try:
+            Path(args.output).write_text(payload, encoding="utf-8")
+        except OSError as exc:
+            print(f"写入转录结果失败: {exc}", file=sys.stderr)
+            return 2
         print(f"已写入 {args.output}（{len(lines)} 段）", file=sys.stderr)
     else:
         print(payload)

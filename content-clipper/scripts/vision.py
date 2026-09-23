@@ -12,6 +12,7 @@
 
 模型调用走 OpenAI 兼容接口，凭据从环境变量 ``VISION_API_KEY`` 读取，
 接口地址必须通过环境变量 ``VISION_BASE_URL`` 配置，不提供默认端点。
+模型通过 ``--model`` 或 ``VISION_MODEL`` 指定，不提供默认模型。
 
 典型用法::
 
@@ -36,12 +37,18 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import math
 import mimetypes
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 DEFAULT_API_KEY_ENV = "VISION_API_KEY"
 
@@ -117,18 +124,19 @@ def ask_image(
         image_path: 图片路径。
         question: 要问的问题。也可直接传入 :data:`UNDERSTAND_PROMPT` 或
             :data:`OCR_PROMPT` 做整图解读。
-        model: 模型名。
+        model: 当前接口支持的视觉模型 ID；省略时读取 VISION_MODEL，无默认值。
         timeout: 单次请求的超时秒数。
 
     Returns:
         模型返回的文本内容。
 
     Raises:
-        RuntimeError: 请求失败且重试耗尽时抛出，消息中含 HTTP 状态码或原因。
+        FileNotFoundError: 图片文件不存在。
+        ValueError: 问题为空或超时不是正数。
+        RuntimeError: 缺少端点、模型或凭据，或接口请求失败、未返回非空文本。
     """
-    import urllib.error
-    import urllib.request
-
+    if not question.strip() or timeout <= 0:
+        raise ValueError("问题不能为空，timeout 必须大于 0。")
     path = Path(image_path)
     if not path.is_file():
         raise FileNotFoundError(f"找不到图片: {path}")
@@ -136,7 +144,7 @@ def ask_image(
     base_url = os.environ.get("VISION_BASE_URL", "").strip().rstrip("/")
     if not base_url:
         raise RuntimeError("未设置环境变量 VISION_BASE_URL，请配置 OpenAI 兼容接口的基础地址。")
-    model = (os.environ.get("VISION_MODEL", "").strip() if model is None else model).strip()
+    model = (os.environ.get("VISION_MODEL", "") if model is None else model).strip()
     if not model:
         raise RuntimeError("未指定视觉模型，请通过 --model 或 VISION_MODEL 设置支持图片输入的模型 ID。")
     body = {
@@ -162,16 +170,33 @@ def ask_image(
         method="POST",
     )
 
-    # 批量解读会连打几十次请求，服务端偶发 5xx / 超时是常态，不重试会让
-    # 整个批次白跑。只重试可恢复的错误：4xx（密钥错、参数错）重试无意义。
+    return _request_text(req, timeout)
+
+
+def _response_text(payload: bytes) -> str:
+    """校验接口响应，只接受非空文本，避免把错误响应写进笔记。"""
+    try:
+        data = json.loads(payload)
+        text = data["choices"][0]["message"]["content"]
+    except (ValueError, UnicodeDecodeError, KeyError, IndexError, TypeError) as exc:
+        raise RuntimeError("模型响应格式无效：缺少 choices[0].message.content 文本。") from exc
+    if not isinstance(text, str) or not text.strip():
+        raise RuntimeError("模型未返回非空文本，请检查模型的视觉能力与响应格式。")
+    return text
+
+
+def _request_text(req: urllib.request.Request, timeout: int) -> str:
+    """发送视觉请求，对限流、服务端及网络错误进行有界退避重试。"""
+    # 认证和参数错误不能靠重试解决；408/429 则可能在等待后恢复。
     last_error = ""
     for attempt in range(MAX_RETRIES + 1):
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-            return data["choices"][0]["message"]["content"]
+                payload = resp.read()
+            return _response_text(payload)
         except urllib.error.HTTPError as exc:
-            if exc.code < 500:
+            exc.close()
+            if exc.code < 500 and exc.code not in (408, 429):
                 raise RuntimeError(
                     f"请求被拒绝（HTTP {exc.code}）: {exc.reason}。"
                     f"请检查 VISION_API_KEY 与模型名，重试不会解决。"
@@ -212,19 +237,21 @@ def _video_duration(video_path: Path) -> float:
     if result.returncode != 0:
         return 0.0
     try:
-        return float((result.stdout or "0").strip())
+        duration = float((result.stdout or "0").strip())
+        return duration if math.isfinite(duration) and duration > 0 else 0.0
     except ValueError:
         return 0.0
 
 
 def _even_interval(duration: float, frame_count: int) -> float:
-    """按视频时长与目标帧数算出均匀采样间隔（秒）。
+    """按视频时长与采样帧数算出均匀采样间隔（秒）。
 
-    时长很短时保证至少按 1 秒间隔，避免间隔过小而抽到大量重复帧。
+    时长很短时保证至少按 1 秒间隔，避免间隔过小而抽到大量重复帧。调用方
+    传入的是采样帧数，不一定是最终目标帧数。
 
     Args:
         duration: 视频时长（秒）。
-        frame_count: 目标帧数。
+        frame_count: 期望采样出的帧数。
 
     Returns:
         采样间隔（秒）。
@@ -252,11 +279,14 @@ def _extract_uniform(src: Path, dst: Path, interval: float) -> list[Path]:
         "-q:v", "3",
         str(dst / "cand_%04d.jpg"),
     ]
-    result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    result = subprocess.run(
+        cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        text=True, errors="replace",
+    )
     if result.returncode != 0:
         raise RuntimeError(
             f"ffmpeg 抽帧失败（返回码 {result.returncode}）。"
-            f"请手动确认 ffmpeg 可用、视频文件有效。"
+            f"请确认视频文件有效。\n{result.stderr[-2000:]}"
         )
     return sorted(dst.glob("cand_*.jpg"))
 
@@ -267,10 +297,10 @@ def select_sharpest(
     """按清晰度与亮度从候选帧中挑出最适合读图的帧。
 
     清晰度用灰度图的 Laplacian 方差衡量，亮度用平均灰度衡量，两者做
-    z-score 归一化后加权求和（清晰度权重更高）。这能剔除运动模糊帧与
-    过暗/过曝帧——它们会让 OCR 与图表理解显著退化。
+    z-score 归一化后加权求和（清晰度权重更高）。亮度项偏好较亮的画面，
+    并不单独检测过曝；仅在候选帧多于目标数时执行评分。
 
-    为控制成本，只加载 PIL；PIL 缺失时退化为「均匀取前 target 帧」。
+    Pillow 或 numpy 缺失时退化为均匀下采样。
 
     Args:
         candidates: 候选帧路径列表。
@@ -278,7 +308,12 @@ def select_sharpest(
 
     Returns:
         选中的帧路径，保持原有时间顺序。
+
+    Raises:
+        ValueError: 目标帧数不是正数，或图片尺寸不足以计算清晰度。
     """
+    if target <= 0:
+        raise ValueError("target 必须大于 0。")
     if len(candidates) <= target:
         return candidates
 
@@ -295,6 +330,8 @@ def select_sharpest(
     for path in candidates:
         with Image.open(path) as im:
             gray = np.asarray(im.convert("L"), dtype=np.float64)
+        if min(gray.shape) < 3:
+            raise ValueError(f"图片尺寸不足 3×3，无法计算清晰度: {path}")
         brightness.append(float(gray.mean()))
         # Laplacian 方差：值越大表示边缘越锐利。
         lap = (
@@ -305,6 +342,7 @@ def select_sharpest(
         sharpness.append(float(lap.var()))
 
     def _zscore(values: list[float]) -> "np.ndarray":
+        """标准化评分，所有值相同时返回零以避免除零。"""
         arr = np.asarray(values, dtype=np.float64)
         std = arr.std()
         return (arr - arr.mean()) / std if std > 0 else arr * 0.0
@@ -314,7 +352,83 @@ def select_sharpest(
         + BRIGHTNESS_WEIGHT * _zscore(brightness)
     )
     ranked = np.argsort(combined)[::-1][:target]
-    return sorted((candidates[int(i)] for i in ranked), key=lambda p: p.name)
+    return [candidates[int(i)] for i in sorted(ranked)]
+
+
+def _publish_frames(dst: Path, selected: list[Path]) -> list[str]:
+    """把新帧发布进输出目录，失败时尽力恢复原有 ``frame_*.jpg``。
+
+    发布前先校验所有最终目标：若某个编号位置已被同名目录占用则直接报错，
+    避免把候选帧移动进该目录。随后把旧帧备份到 ``dst`` 内的临时目录，
+    再用 :meth:`Path.replace` 逐个写入新帧（候选与输出目录同盘，无需复制
+    回退）。备份以「先复制成功再删除原件」的方式建立，复制中途失败时原件
+    仍在，不会丢数据。
+
+    回滚用 :func:`shutil.copy2` 把备份复制回原位，只有全部恢复成功才清理
+    备份目录；恢复失败时保留完整备份并打印路径，由使用者手动处理。
+
+    Args:
+        dst: 输出目录。
+        selected: 已按时间顺序排好的候选帧路径。
+
+    Returns:
+        发布后的帧文件路径列表。
+
+    Raises:
+        RuntimeError: 某个最终目标已被同名目录占用。
+        OSError: 备份或写入失败。已尽力恢复旧帧；若恢复本身也失败，备份
+            会保留，并在 stderr 打印其路径，不再抛出二次异常。
+    """
+    stale = sorted(p for p in dst.glob("frame_*.jpg") if p.is_file())
+
+    # 发布前拒绝非文件目标，避免备份旧帧后才发现目标冲突。
+    for i in range(1, len(selected) + 1):
+        target = dst / f"frame_{i:04d}.jpg"
+        if target.exists() and not target.is_file():
+            raise RuntimeError(
+                f"目标 {target} 已存在且不是文件，无法发布帧。"
+                f"请先移走该目录后重试。"
+            )
+
+    # 备份目录是候选临时目录的兄弟：位于 dst 内、前缀不同，不会被
+    # 候选的 TemporaryDirectory 清理，也无需占用系统临时目录。
+    backup_root = Path(tempfile.mkdtemp(prefix=".frame-backup-", dir=dst))
+    backed_up: list[Path] = []
+    published: list[Path] = []
+    try:
+        for old in stale:
+            backup = backup_root / old.name
+            shutil.copy2(old, backup)  # 复制成功前不动原件
+            backed_up.append(old)
+            old.unlink()
+
+        for i, path in enumerate(selected, 1):
+            final = dst / f"frame_{i:04d}.jpg"
+            path.replace(final)
+            published.append(final)
+    except Exception:
+        rollback_failed = False
+        try:
+            for new in published:
+                if new.is_file():
+                    new.unlink()
+            for old in backed_up:
+                # 复制成功前保留备份，以便回滚中途失败后手动恢复。
+                shutil.copy2(backup_root / old.name, old)
+        except Exception as rollback_exc:
+            # 回滚失败：只报告，不清理备份目录，完整副本仍可用于手动恢复。
+            rollback_failed = True
+            print(
+                f"恢复旧帧失败: {rollback_exc}。旧帧备份保留在 {backup_root}，"
+                f"请手动复制回 {dst}。",
+                file=sys.stderr,
+            )
+        if not rollback_failed:
+            shutil.rmtree(backup_root, ignore_errors=True)
+        raise
+
+    shutil.rmtree(backup_root, ignore_errors=True)
+    return [str(p) for p in published]
 
 
 def extract_frames(
@@ -329,50 +443,51 @@ def extract_frames(
     问答任务上均匀采样优于自适应选帧；依据 arXiv:2506.00667，抽取后用
     清晰度评分二次筛选可剔除模糊帧。
 
+    候选帧按目标数的 2 倍采样，为清晰度筛选留出余量：`select_sharpest`
+    仅在候选多于目标时才评分，等量采样会让筛选形同虚设。采样间隔有 1 秒
+    下限，短视频时长不足时候选可能达不到目标数的 2 倍甚至不多于目标数，
+    此时 `select_sharpest` 原样返回全部候选。
+
     Args:
         video_path: 视频文件路径。
-        outdir: 抽帧输出目录，不存在则创建。
-        frame_count: 最终保留的帧数。
+        outdir: 输出目录，不存在则创建；成功选帧后替换其中的 frame_*.jpg。
+        frame_count: 最多保留的帧数，必须大于零。
 
     Returns:
         按时间顺序排列的帧文件路径列表。
+
+    Raises:
+        ValueError: 目标帧数不是正数。
+        OSError: 输入或外部命令不存在，或文件读写失败。
+        RuntimeError: ffmpeg 抽帧失败或未产出候选帧。
     """
+    if frame_count <= 0:
+        raise ValueError("frame_count 必须大于 0。")
     src = Path(video_path)
     if not src.is_file():
         raise FileNotFoundError(f"找不到视频: {src}")
 
     dst = Path(outdir)
     dst.mkdir(parents=True, exist_ok=True)
-    for old in list(dst.glob("frame_*.jpg")) + list(dst.glob("cand_*.jpg")):
-        old.unlink()
-
     duration = _video_duration(src)
-    interval = _even_interval(duration, frame_count)
-    candidates = _extract_uniform(src, dst, interval)
-    if not candidates:
-        raise RuntimeError("未能从视频读取到任何帧，请确认视频文件有效。")
-
-    selected = select_sharpest(candidates, frame_count)
-
-    # 重命名为连续编号的 frame_XXXX.jpg，卸掉候选前缀。
-    frames: list[str] = []
-    for i, path in enumerate(selected, 1):
-        final = dst / f"frame_{i:04d}.jpg"
-        if path != final:
-            path.replace(final)
-        frames.append(str(final))
-
-    # 清理未被选中的候选帧。
-    for leftover in dst.glob("cand_*.jpg"):
-        leftover.unlink()
-    return frames
+    # 候选取目标的 2 倍，给清晰度筛选留余量；间隔的 1 秒下限由 _even_interval 保证。
+    interval = _even_interval(duration, frame_count * 2)
+    # 隔离候选帧：失败时保留旧结果，且不误删调用方的 cand_*.jpg。
+    with TemporaryDirectory(prefix=".frames-", dir=dst) as workdir:
+        candidates = _extract_uniform(src, Path(workdir), interval)
+        if not candidates:
+            raise RuntimeError("未能从视频读取到任何帧，请确认视频文件有效。")
+        selected = _publish_frames(dst, select_sharpest(candidates, frame_count))
+    return selected
 
 
 def _iter_images(target: Path) -> list[Path]:
     """收集目标路径下的图片文件，目录则按文件名排序展开。"""
     if target.is_file():
         return [target]
-    return sorted(p for p in target.iterdir() if p.suffix.lower() in IMAGE_SUFFIXES)
+    return sorted(
+        p for p in target.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_SUFFIXES
+    )
 
 
 def _cmd_understand(args: argparse.Namespace) -> int:
@@ -387,7 +502,7 @@ def _cmd_understand(args: argparse.Namespace) -> int:
     results: list[str] = []
     for i, img in enumerate(images, 1):
         print(f"[{i}/{len(images)}] {label}: {img.name}", file=sys.stderr)
-        text = ask_image(img, prompt)
+        text = ask_image(img, prompt, model=args.model)
         if args.batch and len(images) > 1:
             results.append(f"--- 第 {i} 张：{img.name} ---\n{text}")
         else:
@@ -404,7 +519,7 @@ def _cmd_understand(args: argparse.Namespace) -> int:
 
 def _cmd_ask(args: argparse.Namespace) -> int:
     """ask 子命令：对单图提出自定义问题。"""
-    print(ask_image(args.image, args.question))
+    print(ask_image(args.image, args.question, model=args.model))
     return 0
 
 
@@ -417,11 +532,19 @@ def _cmd_frames(args: argparse.Namespace) -> int:
     return 0
 
 
-def main() -> int:
-    """命令行入口，按子命令分发。"""
+def main(argv: list[str] | None = None) -> int:
+    """解析命令行参数并执行图片理解或抽帧。
+
+    Args:
+        argv: 命令行参数；省略时读取进程参数。
+
+    Returns:
+        0 表示成功，1 表示处理失败；参数解析错误由 argparse 以 2 退出。
+    """
     if sys.platform == "win32":
-        sys.stdout.reconfigure(encoding="utf-8")
-        sys.stderr.reconfigure(encoding="utf-8")
+        for stream in (sys.stdout, sys.stderr):
+            if hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8")
 
     parser = argparse.ArgumentParser(description="图片理解与视频抽帧公用脚本")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -432,6 +555,7 @@ def main() -> int:
     p_und.add_argument("target", help="图片文件或目录")
     p_und.add_argument("--batch", action="store_true", help="目录批量模式，标注每张来源")
     p_und.add_argument("--output", default=None, help="结果写入文件")
+    p_und.add_argument("--model", help="视觉模型 ID；优先于 VISION_MODEL，无默认模型")
     p_und.add_argument(
         "--raw", action="store_true", help="退化为纯文字转录，不做图示解读"
     )
@@ -440,6 +564,7 @@ def main() -> int:
     p_ask = sub.add_parser("ask", help="对单图提问")
     p_ask.add_argument("image", help="图片路径")
     p_ask.add_argument("--question", required=True, help="问题内容")
+    p_ask.add_argument("--model", help="视觉模型 ID；优先于 VISION_MODEL，无默认模型")
     p_ask.set_defaults(func=_cmd_ask)
 
     p_frames = sub.add_parser("frames", help="视频抽帧")
@@ -451,10 +576,12 @@ def main() -> int:
     )
     p_frames.set_defaults(func=_cmd_frames)
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    if args.command == "frames" and args.count <= 0:
+        parser.error("--count 必须大于 0")
     try:
         return args.func(args)
-    except (RuntimeError, FileNotFoundError) as exc:
+    except (RuntimeError, OSError, ValueError) as exc:
         print(f"错误: {exc}", file=sys.stderr)
         return 1
 
